@@ -1,3 +1,4 @@
+// Enhanced CIDR Block Calculator with Expanded Input Formats in Go
 package main
 
 import (
@@ -11,33 +12,30 @@ import (
 	"strings"
 )
 
-// parseCIDR validates and returns a CIDR block
+// parseCIDR validates and returns a CIDR block.
 func parseCIDR(input string) (*net.IPNet, error) {
 	ip, ipnet, err := net.ParseCIDR(input)
 	if err != nil {
-		return nil, fmt.Errorf("Invalid CIDR block: %v", input)
+		return nil, fmt.Errorf("invalid CIDR block: %v", input)
 	}
 	if ip == nil || ipnet == nil {
-		return nil, fmt.Errorf("Invalid IP or CIDR range")
+		return nil, fmt.Errorf("invalid IP or CIDR range")
 	}
 	return ipnet, nil
 }
 
-// mergeCIDRs merges a list of CIDR blocks into a single CIDR block
-func mergeCIDRs(cidrs []*net.IPNet) (*net.IPNet, error) {
+// mergeCIDRs merges a list of CIDR blocks into a minimal set.
+func mergeCIDRs(cidrs []*net.IPNet) []*net.IPNet {
 	// This basic implementation does not yet collapse CIDRs.
-	// Future versions will collapse CIDRs.
-	// For now, it just returns the first CIDR block.
-	if len(cidrs) == 0 {
-		return nil, fmt.Errorf("No CIDR blocks to merge")
-	}
-	return cidrs[0], nil
+	// Future iterations can add functionality for collapsing adjacent ranges.
+	return cidrs
 }
 
-func parseWildcard(input string) (*net.IPNet, error) {
-	wildCardRegex := regexp.MustCompile(`^((?:\d{1,3}|\*)\.){3}(?:\d{1,3}|\*)$`)
-	if !wildCardRegex.MatchString(input) {
-		return nil, fmt.Errorf("Invalid wildcard notation: %s", input)
+// parseWildcard converts wildcard notation (e.g., 192.168.*.*) to CIDR blocks.
+func parseWildcard(input string) ([]*net.IPNet, error) {
+	wildcardRegex := regexp.MustCompile(`^((?:\d{1,3}|\*)\.){3}(?:\d{1,3}|\*)$`)
+	if !wildcardRegex.MatchString(input) {
+		return nil, fmt.Errorf("invalid wildcard notation: %s", input)
 	}
 
 	octets := strings.Split(input, ".")
@@ -69,7 +67,7 @@ func parseWildcard(input string) (*net.IPNet, error) {
 func parseCSV(filename string) ([]*net.IPNet, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil, fmt.Errorf("Error opening file: %v", err)
+		return nil, fmt.Errorf("error opening file: %v", err)
 	}
 	defer file.Close()
 
@@ -78,7 +76,7 @@ func parseCSV(filename string) ([]*net.IPNet, error) {
 
 	records, err := reader.ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("Error reading CSV: %v", err)
+		return nil, fmt.Errorf("error reading CSV: %v", err)
 	}
 
 	for _, record := range records {
@@ -94,7 +92,6 @@ func parseCSV(filename string) ([]*net.IPNet, error) {
 	return cidrs, nil
 }
 
-// Main function
 func main() {
 	var cidrs []*net.IPNet
 
@@ -130,6 +127,11 @@ func main() {
 				cidrs = append(cidrs, ipnet)
 			}
 		}
+
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
+			os.Exit(1)
+		}
 	} else if strings.HasSuffix(inputType, ".csv") {
 		// Parse from CSV file
 		csvCidrs, err := parseCSV(inputType)
@@ -143,15 +145,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := bufio.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Merge CIDRs (currently a placeholder for future functionality)
 	result := mergeCIDRs(cidrs)
 
-	// Output merged CIDRs in JSON format
 	fmt.Println("Merged CIDR blocks in JSON:")
 	output, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
