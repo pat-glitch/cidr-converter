@@ -3,12 +3,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -26,9 +28,23 @@ func parseCIDR(input string) (*net.IPNet, error) {
 
 // mergeCIDRs merges a list of CIDR blocks into a minimal set.
 func mergeCIDRs(cidrs []*net.IPNet) []*net.IPNet {
-	// This basic implementation does not yet collapse CIDRs.
-	// Future iterations can add functionality for collapsing adjacent ranges.
-	return cidrs
+	sort.Slice(cidrs, func(i, j int) bool {
+		return bytes.Compare(cidrs[i].IP, cidrs[j].IP) < 0
+	})
+
+	result := []*net.IPNet{}
+	for _, cidr := range cidrs {
+		if len(result) == 0 {
+			result = append(result, cidr)
+			continue
+		}
+		last := result[len(result)-1]
+		if last.Contains(cidr.IP) {
+			continue
+		}
+		result = append(result, cidr)
+	}
+	return result
 }
 
 // parseWildcard converts wildcard notation (e.g., 192.168.*.*) to CIDR blocks.
@@ -92,6 +108,47 @@ func parseCSV(filename string) ([]*net.IPNet, error) {
 	return cidrs, nil
 }
 
+func parseJSON(filename string) ([]*net.IPNet, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	var cidrStrings []string
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&cidrStrings); err != nil {
+		return nil, fmt.Errorf("error decoding JSON: %v", err)
+	}
+	var cidrs []*net.IPNet
+	for _, entry := range cidrStrings {
+		ipnet, err := parseCIDR(entry)
+		if err == nil {
+			cidrs = append(cidrs, ipnet)
+		}
+	}
+	return cidrs, nil
+}
+
+func saveToJSON(filename string, cidrs []*net.IPNet) error {
+	var cidrStrings []string
+	for _, cidr := range cidrs {
+		cidrStrings = append(cidrStrings, cidr.String())
+	}
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("error creating file: %v", err)
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(cidrStrings); err != nil {
+		return fmt.Errorf("error encoding JSON: %v", err)
+	}
+	return nil
+}
+
 func main() {
 	var cidrs []*net.IPNet
 
@@ -127,11 +184,6 @@ func main() {
 				cidrs = append(cidrs, ipnet)
 			}
 		}
-
-		if err := scanner.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading input: %v\n", err)
-			os.Exit(1)
-		}
 	} else if strings.HasSuffix(inputType, ".csv") {
 		// Parse from CSV file
 		csvCidrs, err := parseCSV(inputType)
@@ -140,18 +192,26 @@ func main() {
 			os.Exit(1)
 		}
 		cidrs = append(cidrs, csvCidrs...)
+	} else if strings.HasSuffix(inputType, ".json") {
+		// Parse from JSON file
+		jsonCidrs, err := parseJSON(inputType)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading JSON: %v\n", err)
+			os.Exit(1)
+		}
+		cidrs = append(cidrs, jsonCidrs...)
 	} else {
 		fmt.Fprintf(os.Stderr, "Unsupported input format\n")
 		os.Exit(1)
 	}
-
+	//Merge CIDRs(cidrs)
 	result := mergeCIDRs(cidrs)
 
-	fmt.Println("Merged CIDR blocks in JSON:")
-	output, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error generating JSON output: %v\n", err)
+	// Output merged CIDR blocks in JSON format
+	outputFile := "merged_cidrs.json"
+	if err := saveToJSON(outputFile, result); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving JSON: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(output))
+	fmt.Printf("Merged CIDR blocks saved to %s\n", outputFile)
 }
