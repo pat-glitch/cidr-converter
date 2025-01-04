@@ -1,147 +1,113 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"os"
-	"os/exec"
-	"strings"
+	"net"
+	"reflect"
 	"testing"
 )
 
-func runCidrConverter(input string, inputFile string, outputFile string) (string, error) {
-	cmd := exec.Command("go", "run", "cidr-converter.go", "-input", inputFile, "-output", outputFile)
-	cmd.Stdin = strings.NewReader(input)
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+// Helper function to parse CIDR blocks for test setup
+func mustParseCIDR(cidr string) *net.IPNet {
+	_, ipnet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		return stderr.String(), err
+		panic(err)
 	}
-	return out.String(), nil
+	return ipnet
 }
 
-func TestStandardInput(t *testing.T) {
-	input := "192.168.0.0/24\n192.168.1.0/24\n"
-	expected := `["192.168.0.0/23"]` //Expected output is a JSON format
-
-	outputFile := "test_output.json"
-	defer os.Remove(outputFile)
-
-	_, err := runCidrConverter(input, "", outputFile)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
+func TestParseCIDR(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected *net.IPNet
+		hasError bool
+	}{
+		{"192.168.1.0/24", mustParseCIDR("192.168.1.0/24"), false},
+		{"192.168.1.0/33", nil, true}, // Invalid CIDR
+		{"invalid", nil, true},        // Non-CIDR input
 	}
 
-	// Verify output file
-	data, err := os.ReadFile(outputFile)
-	if err != nil {
-		t.Errorf("Error reading output file: %v", err)
-	}
-
-	if string(data) != expected {
-		t.Errorf("Expected %s, got %s", expected, string(data))
+	for _, test := range tests {
+		result, err := parseCIDR(test.input)
+		if (err != nil) != test.hasError {
+			t.Errorf("parseCIDR(%q) error = %v, expected error: %v", test.input, err, test.hasError)
+		}
+		if !reflect.DeepEqual(result, test.expected) {
+			t.Errorf("parseCIDR(%q) = %v, expected: %v", test.input, result, test.expected)
+		}
 	}
 }
 
-func TestCSVInput(t *testing.T) {
-	csvInput := `IP Range
-	192.168.0.0-192.168.0.255
-	192.168.1.0-192.168.1.255
-	`
-
-	inputFile := "test_input.csv"
-	outputFile := "test_output.json"
-
-	// Write CSV input to file
-	err := os.WriteFile(inputFile, []byte(csvInput), 0644)
-	if err != nil {
-		t.Fatalf("Error writing CSV file: %v", err)
+func TestMergeCIDRs(t *testing.T) {
+	input := []*net.IPNet{
+		mustParseCIDR("192.168.1.0/24"),
+		mustParseCIDR("192.168.2.0/24"),
+		mustParseCIDR("192.168.1.128/25"),
 	}
-	defer os.Remove(inputFile)
-	defer os.Remove(outputFile)
-
-	_, err = runCidrConverter("", inputFile, outputFile)
-	if err != nil {
-		t.Errorf("Error running CIDR converter: %v", err)
+	expected := []*net.IPNet{
+		mustParseCIDR("192.168.1.0/24"),
+		mustParseCIDR("192.168.2.0/24"),
 	}
 
-	//Verify output file
-	data, err := os.ReadFile(outputFile)
-	if err != nil {
-		t.Errorf("Error reading output file: %v", err)
-	}
-
-	expected := `["192.18.0.0/23"]`
-	if string(data) != expected {
-		t.Errorf("Expected %s, got %s", expected, string(data))
+	result := mergeCIDRs(input)
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("mergeCIDRs(%v) = %v, expected: %v", input, result, expected)
 	}
 }
 
-func TestJSONInput(t *testing.T) {
-	jsonInput := `{
-		"cidrs": [
-			"192.168.0.0/24",
-			"192.168.1.0/24"
-		]
-	}`
-	inputFile := "test_input.json"
-	outputFile := "test_output.json"
-
-	// Write JSON input to a file
-	err := os.WriteFile(inputFile, []byte(jsonInput), 0644)
-	if err != nil {
-		t.Fatalf("Error creating test JSON file: %v", err)
+func TestAggregateCIDRs(t *testing.T) {
+	input := []*net.IPNet{
+		mustParseCIDR("192.168.1.0/24"),
+		mustParseCIDR("192.168.2.0/24"),
 	}
-	defer os.Remove(inputFile)
-	defer os.Remove(outputFile)
-
-	_, err = runCidrConverter("", inputFile, outputFile)
-	if err != nil {
-		t.Errorf("Error running CIDR converter: %v", err)
+	expected := []*net.IPNet{
+		mustParseCIDR("192.168.0.0/22"),
 	}
 
-	// Verify output
-	data, err := os.ReadFile(outputFile)
-	if err != nil {
-		t.Errorf("Error reading output file: %v", err)
-	}
-
-	var result []string
-	err = json.Unmarshal(data, &result)
-	if err != nil {
-		t.Errorf("Error parsing JSON output: %v", err)
-	}
-
-	expected := []string{"192.168.0.0/23"}
-	if len(result) != len(expected) || result[0] != expected[0] {
-		t.Errorf("Expected %v but got %v", expected, result)
+	result := aggregateCIDRs(input)
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("aggregateCIDRs(%v) = %v, expected: %v", input, result, expected)
 	}
 }
 
-func TestWildcardInput(t *testing.T) {
-	input := "192.168.*.*\n"
-	expected := `["192.168.0.0/16"]` // Expected merged output in JSON format
-
-	outputFile := "test_output.json"
-	defer os.Remove(outputFile)
-
-	_, err := runCidrConverter(input, "", outputFile)
-	if err != nil {
-		t.Errorf("Error running CIDR converter: %v", err)
+func TestParseWildcard(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []*net.IPNet
+		hasError bool
+	}{
+		{"192.168.*.*", []*net.IPNet{mustParseCIDR("192.168.0.0/16")}, false},
+		{"192.168.1.*", []*net.IPNet{mustParseCIDR("192.168.1.0/24")}, false},
+		{"invalid", nil, true},
 	}
 
-	// Verify output file
-	data, err := os.ReadFile(outputFile)
-	if err != nil {
-		t.Errorf("Error reading output file: %v", err)
+	for _, test := range tests {
+		result, err := parseWildcard(test.input)
+		if (err != nil) != test.hasError {
+			t.Errorf("parseWildcard(%q) error = %v, expected error: %v", test.input, err, test.hasError)
+		}
+		if !reflect.DeepEqual(result, test.expected) {
+			t.Errorf("parseWildcard(%q) = %v, expected: %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestParseBinary(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected *net.IPNet
+		hasError bool
+	}{
+		{"11000000101010000000000100000000/24", mustParseCIDR("192.168.1.0/24"), false},
+		{"invalid", nil, true},
 	}
 
-	if string(data) != expected {
-		t.Errorf("Expected %s but got %s", expected, string(data))
+	for _, test := range tests {
+		result, err := parseBinary(test.input)
+		if (err != nil) != test.hasError {
+			t.Errorf("parseBinary(%q) error = %v, expected error: %v", test.input, err, test.hasError)
+		}
+		if !reflect.DeepEqual(result, test.expected) {
+			t.Errorf("parseBinary(%q) = %v, expected: %v", test.input, result, test.expected)
+		}
 	}
 }
