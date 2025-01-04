@@ -1,0 +1,5 @@
+# all the executables
+*.exe
+
+# the merged_cidrs.json file
+merged_cidrs.json
