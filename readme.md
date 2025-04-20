@@ -77,7 +77,7 @@ JSON file format:
 
 ## Output
 
-The tool saves merged CIDR blocks to `merged_cidrs.json`:
+The tool saves merged CIDR blocks to `test_output.json`:
 
 ```json
 [
